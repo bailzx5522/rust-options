@@ -1,9 +1,8 @@
 // lib.rs
 
-
 pub mod pricing {
-    use statrs::distribution::Normal;
     use statrs::distribution::ContinuousCDF;
+    use statrs::distribution::Normal;
 
     pub fn black_scholes_call_price(s: f64, k: f64, t: f64, r: f64, v: f64) -> f64 {
         let d1 = ((s / k).ln() + (r + 0.5 * v * v) * t) / (v * t.sqrt());
@@ -20,11 +19,10 @@ pub mod pricing {
     }
 }
 
-
 pub mod greeks {
-    use statrs::distribution::Normal;
-    use statrs::distribution::ContinuousCDF;
     use statrs::distribution::Continuous;
+    use statrs::distribution::ContinuousCDF;
+    use statrs::distribution::Normal;
 
     fn d1(s: f64, k: f64, t: f64, r: f64, v: f64) -> f64 {
         ((s / k).ln() + (r + 0.5 * v * v) * t) / (v * t.sqrt())
@@ -43,9 +41,9 @@ pub mod greeks {
         delta_call(s, k, t, r, v) - 1.0
     }
     pub fn gamma(s: f64, k: f64, t: f64, r: f64, v: f64) -> f64 {
-    let norm = Normal::new(0.0, 1.0).unwrap();
-    norm.pdf(d1(s, k, t, r, v)) / (s * v * t.sqrt())
-}
+        let norm = Normal::new(0.0, 1.0).unwrap();
+        norm.pdf(d1(s, k, t, r, v)) / (s * v * t.sqrt())
+    }
 
     pub fn vega(s: f64, k: f64, t: f64, r: f64, v: f64) -> f64 {
         let norm = Normal::new(0.0, 1.0).unwrap();
@@ -80,6 +78,55 @@ pub mod greeks {
         -k * t * (-r * t).exp() * norm.cdf(-d2(s, k, t, r, v)) / 100.0
     }
 
+    // 使用期权价格反推IV
+    pub fn implied_vol_call(
+        binary_price: f64, // 市场报价，例如 0.62
+        s: f64,            // 现价
+        k: f64,            // 行权价
+        t: f64,            // 到期时间（年）
+    ) -> Option<f64> {
+        let norm = Normal::new(0.0, 1.0).unwrap();
+
+        // 第一步：反解出 d2
+        let d2 = norm.inverse_cdf(binary_price);
+
+        // 第二步：根据 d2 公式反解 sigma
+        let ln_sk = (s / k).ln();
+        let sqrt_t = t.sqrt();
+
+        // d2 = [ln(S/K) + (r - q - σ²/2) T] / (σ √T)
+        // 令 x = σ √T，则：
+        // d2 * x = ln(S/K) + (r - q) T - 0.5 x²
+        // 0.5 x² + d2 x - [ln(S/K) + (r - q)T] = 0
+
+        let a = 0.5;
+        let b = d2;
+        let c = -(ln_sk);
+
+        let discriminant = b * b - 4.0 * a * c;
+        if discriminant < 0.0 {
+            return None;
+        }
+
+        let sqrt_disc = discriminant.sqrt();
+        // 两个根，取正的且合理的那个（通常较小的那个）
+        let x1 = (-b + sqrt_disc) / (2.0 * a);
+        let x2 = (-b - sqrt_disc) / (2.0 * a);
+
+        let x = if x1 > 0.0 { x1 } else { x2 };
+        if x <= 0.0 {
+            return None;
+        }
+
+        let sigma = x / sqrt_t;
+
+        // 一般波动率不会超过 1000%，这里简单做个范围限制
+        if sigma > 10.0 || sigma < 1e-6 {
+            return None;
+        }
+
+        Some(sigma)
+    }
 }
 
 pub mod strategy {
@@ -142,20 +189,19 @@ pub mod strategy {
     pub fn short_strangle(s: f64, kc: f64, c: f64, kp: f64, p: f64) -> f64 {
         short_call_payoff(s, kc, c) + short_put_payoff(s, kp, p)
     }
-
 }
 
 pub mod options {
     pub enum OptionType {
         Call,
-        Put
+        Put,
     }
 
-pub struct Option {
+    pub struct Option {
         pub option_type: OptionType,
         pub rfr: f64,
         pub strike: f64,
         pub spot: f64,
-        pub iv: f64
+        pub iv: f64,
     }
 }
