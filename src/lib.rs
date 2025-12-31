@@ -79,29 +79,38 @@ pub mod greeks {
     }
 
     // 使用期权价格反推IV
-    pub fn implied_vol_call(
-        binary_price: f64, // 市场报价，例如 0.62
+    pub fn implied_vol_binary_call(
+        binary_price: f64, // 0 ~ 1，例如 0.62
         s: f64,            // 现价
         k: f64,            // 行权价
-        t: f64,            // 到期时间（年）
+        t: f64,            // 年化到期时间
+        r: f64,            // 无风险利率
+        q: f64,            // 股息率（股票）或外币利率（外汇）
     ) -> Option<f64> {
+        if binary_price <= 0.0 || binary_price >= 1.0 {
+            return None;
+        }
+        if t <= 0.0 {
+            return if binary_price > 0.5 { Some(0.0) } else { None };
+        }
+
         let norm = Normal::new(0.0, 1.0).unwrap();
 
-        // 第一步：反解出 d2
-        let d2 = norm.inverse_cdf(binary_price);
+        // 第一步：反解 d2
+        let d2 = norm.inverse_cdf(binary_price); // ppf = inverse_cdf
 
-        // 第二步：根据 d2 公式反解 sigma
         let ln_sk = (s / k).ln();
+        let drift = (r - q) * t;
         let sqrt_t = t.sqrt();
 
-        // d2 = [ln(S/K) + (r - q - σ²/2) T] / (σ √T)
-        // 令 x = σ √T，则：
-        // d2 * x = ln(S/K) + (r - q) T - 0.5 x²
-        // 0.5 x² + d2 x - [ln(S/K) + (r - q)T] = 0
+        // d2 = [ln(S/K) + (r - q - σ²/2) T ] / (σ √T)
+        // 令 x = σ √T  →  x > 0
+        // 则：   d2 ⋅ x = ln(S/K) + (r-q)T - 0.5 x²
+        // 移项： 0.5 x² + d2 x - [ln(S/K) + (r-q)T] = 0
 
         let a = 0.5;
         let b = d2;
-        let c = -(ln_sk);
+        let c = -(ln_sk + drift);
 
         let discriminant = b * b - 4.0 * a * c;
         if discriminant < 0.0 {
@@ -109,19 +118,32 @@ pub mod greeks {
         }
 
         let sqrt_disc = discriminant.sqrt();
-        // 两个根，取正的且合理的那个（通常较小的那个）
+
+        // 因为 x = σ√T 必须 > 0，我们只考虑正根
+        // 而且因为 a > 0 (开口向上)，通常取 -b + sqrt 的那个（较大根）更可能正
+        let mut x_candidates = vec![];
+
         let x1 = (-b + sqrt_disc) / (2.0 * a);
         let x2 = (-b - sqrt_disc) / (2.0 * a);
 
-        let x = if x1 > 0.0 { x1 } else { x2 };
-        if x <= 0.0 {
+        if x1 > 1e-10 {
+            x_candidates.push(x1);
+        }
+        if x2 > 1e-10 {
+            x_candidates.push(x2);
+        }
+
+        if x_candidates.is_empty() {
             return None;
         }
 
+        // 一般选绝对值较小的那个（更合理），但也可以两个都试，选更接近市场习惯的
+        let x = x_candidates.iter().copied().reduce(f64::min).unwrap();
+
         let sigma = x / sqrt_t;
 
-        // 一般波动率不会超过 1000%，这里简单做个范围限制
-        if sigma > 10.0 || sigma < 1e-6 {
+        // 合理性检查
+        if sigma.is_nan() || sigma <= 0.0 || sigma > 10.0 {
             return None;
         }
 
